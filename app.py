@@ -73,24 +73,25 @@ with st.sidebar:
         use_ai = st.toggle(
             "啟用 AI 判讀（格式不符時自動辨識欄位）",
             value=False,
-            help="由 Claude AI 分析表格結構，自動對應欄位。適合格式特殊或無法正常解析的報告。",
+            help="由 Google Gemini AI 分析表格結構，自動對應欄位。適合格式特殊或無法正常解析的報告。免費額度可用。",
         )
         ai_api_key = ""
         if use_ai:
             # Check secrets first (for Streamlit Cloud deployment)
             try:
-                ai_api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+                ai_api_key = st.secrets.get("GEMINI_API_KEY", "")
             except Exception:
                 ai_api_key = ""
             if not ai_api_key:
                 ai_api_key = st.text_input(
-                    "Anthropic API Key",
+                    "Google Gemini API Key",
                     type="password",
-                    placeholder="sk-ant-...",
-                    help="前往 console.anthropic.com 取得 API Key。部署到 Streamlit Cloud 時可設定為 Secrets。",
+                    placeholder="AIza...",
+                    help="前往 aistudio.google.com 免費取得 API Key。部署到 Streamlit Cloud 時可設定為 Secrets。",
                 )
+                st.caption("🆓 Gemini 有免費額度，每分鐘 15 次請求")
             else:
-                st.caption("✅ API Key 已從 Streamlit Secrets 載入")
+                st.caption("✅ Gemini API Key 已從 Streamlit Secrets 載入")
     else:
         use_ai = False
         ai_api_key = ""
@@ -155,7 +156,7 @@ if data_mode == "⬆️ 上傳 Excel 檔案":
         st.info("👈 請從左側側邊欄上傳 Excel 報告（ESP 報告、Sub-Order List、送審管制表等）")
         st.stop()
     if use_ai and not ai_api_key:
-        st.warning("⚠️ 請輸入 Anthropic API Key 才能啟用 AI 判讀。")
+        st.warning("⚠️ 請輸入 Google Gemini API Key 才能啟用 AI 判讀。前往 aistudio.google.com 免費取得。")
         st.stop()
 
     with st.spinner("解析中…" + ("（AI 判讀模式）" if use_ai else "")):
