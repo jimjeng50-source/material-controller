@@ -140,28 +140,33 @@ def _detect_suborder_columns(header_rows: list[tuple]) -> dict:
     """Scan header rows and return best-guess column-index map."""
     col: dict = {}
 
-    # Priority patterns: later entries in the list win (more specific beats generic)
+    # Priority patterns — more specific pattern (higher priority) wins on the same key.
+    # IMPORTANT: po_no must NOT match RFP/issue/deadline date columns, so we use
+    # a strict pattern that requires "sub-order" prefix or exact "po no" form.
     patterns = [
-        # (key, regex, priority)  – higher priority wins ties
-        ("item",       re.compile(r"^item$", re.I),                                1),
-        ("item",       re.compile(r"description|desc\b|品名|材料名", re.I),         2),
-        ("tag_no",     re.compile(r"^item$|tag.?no|equip", re.I),                  1),
-        ("po_no",      re.compile(r"sub.?order.?po|po.?no|purchase.*order", re.I), 1),
-        ("sub_vendor", re.compile(r"sub.?vendor|vendor|supplier|廠商", re.I),       1),
-        ("qty",        re.compile(r"q'?ty|quantity|數量", re.I),                    1),
-        ("unit",       re.compile(r"^unit$|單位", re.I),                            1),
-        ("mfg_country",re.compile(r"mfg.?coun|country|國別", re.I),                1),
-        ("ros",        re.compile(r"required|ros\b|need.*date|需求", re.I),         1),
-        ("ros",        re.compile(r"required.*date|need.*on.*site", re.I),          2),
-        ("eta",        re.compile(r"(?!.*rfp)expected.*date|(?!.*rfp)exp.*date|^eta$|預計.*到", re.I), 1),
-        ("eta",        re.compile(r"^expected\s*date$", re.I),                     2),
-        ("ata",        re.compile(r"actual.*date|ata\b|actual.*deliver|實際", re.I), 1),
-        ("ata",        re.compile(r"^actual\s*date$", re.I),                        2),
-        ("delivered_qty", re.compile(r"delivered.*q|交付.*數", re.I),              1),
-        ("mr_no",      re.compile(r"mr.?no|requisition|請購", re.I),               1),
-        ("po_issue_exp",   re.compile(r"expected.*po|exp.*po.*issue", re.I),       1),
-        ("po_deadline",    re.compile(r"po.*deadline|deadline", re.I),             1),
-        ("po_issue_act",   re.compile(r"actual.*po|po.*actual|act.*po", re.I),     1),
+        # (key, regex, priority)
+        ("item",          re.compile(r"^item$", re.I),                                         1),
+        ("item",          re.compile(r"description|desc\b|品名|材料名", re.I),                  2),
+        ("tag_no",        re.compile(r"^item$|tag.?no|equip", re.I),                           1),
+        # po_no: must be "sub-order po", "po no.", "po number", "po#" — NOT "po issue/deadline/rfp"
+        ("po_no",         re.compile(r"sub.?order.?po|^po[\s#\.]*no|po\s*number|po\s*num\b", re.I), 1),
+        ("po_no",         re.compile(r"^purchase\s*order\s*no", re.I),                         2),
+        ("sub_vendor",    re.compile(r"sub.?vendor|vendor|supplier|廠商", re.I),                1),
+        ("qty",           re.compile(r"q'?ty|quantity|數量", re.I),                             1),
+        ("unit",          re.compile(r"^unit$|單位", re.I),                                     1),
+        ("mfg_country",   re.compile(r"mfg.?coun|country|國別", re.I),                         1),
+        ("ros",           re.compile(r"required|ros\b|need.*date|需求", re.I),                  1),
+        ("ros",           re.compile(r"required.*date|need.*on.*site", re.I),                   2),
+        # eta: exclude rfp, issue, deadline columns
+        ("eta",           re.compile(r"(?!.*rfp)(?!.*issue)(?!.*deadline)expected.*date|^eta$|預計.*到", re.I), 1),
+        ("eta",           re.compile(r"^expected\s*date$", re.I),                               2),
+        ("ata",           re.compile(r"(?!.*rfp)(?!.*issue)actual.*date|^ata$|實際.*到", re.I), 1),
+        ("ata",           re.compile(r"^actual\s*date$", re.I),                                 2),
+        ("delivered_qty", re.compile(r"delivered.*q|交付.*數", re.I),                           1),
+        ("mr_no",         re.compile(r"mr.?no|requisition|請購", re.I),                         1),
+        ("po_issue_exp",  re.compile(r"expected.*po|exp.*po.*issue", re.I),                     1),
+        ("po_deadline",   re.compile(r"po.*deadline|deadline", re.I),                           1),
+        ("po_issue_act",  re.compile(r"actual.*po|po.*actual|act.*po", re.I),                   1),
     ]
 
     priority: dict[str, int] = {}
@@ -178,8 +183,31 @@ def _detect_suborder_columns(header_rows: list[tuple]) -> dict:
                         col[key] = ci
                         priority[key] = pri
 
-    # "item" column should NOT be the same as "tag_no" column when both detected
-    # If description (pri=2) wasn't found, fall back to any text-ish column != tag_no
+    return col
+
+
+def _validate_columns(col: dict, data_rows: list[tuple]) -> dict:
+    """
+    Post-detection sanity check: if a column that should contain text (po_no,
+    sub_vendor, item_name) instead contains mostly date-like values, discard it.
+    """
+    _date_pat = re.compile(
+        r"^\d{1,2}[/-]\w{2,3}[/-]\d{2,4}$|^\d{4}[/-]\d{2}[/-]\d{2}$|"
+        r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$", re.I
+    )
+    sample = data_rows[:10]
+
+    def _is_date_col(ci: int) -> bool:
+        vals = [_str(r[ci]) for r in sample if len(r) > ci and _str(r[ci])]
+        if not vals:
+            return False
+        date_hits = sum(1 for v in vals if _date_pat.match(v) or isinstance(v, (datetime, date)))
+        return date_hits / len(vals) >= 0.6
+
+    for key in ("po_no", "mr_no"):
+        if key in col and _is_date_col(col[key]):
+            del col[key]
+
     return col
 
 
@@ -215,10 +243,10 @@ def parse_suborder_list(path: Path) -> list[dict]:
         if "item" not in col_map and "tag_no" not in col_map:
             continue
 
-        item_col = col_map.get("item", col_map.get("tag_no"))
-        tag_col  = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
-
+        item_col   = col_map.get("item", col_map.get("tag_no"))
+        tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
 
         # Carry-forward for ITEM (tag) column which may span multiple rows
         current_tag = ""
@@ -298,6 +326,7 @@ def parse_pdf(path: Path) -> list[dict]:
         item_col   = col_map.get("item", col_map.get("tag_no"))
         tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
         current_tag = ""
         for row in rows[data_start:]:
             raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
@@ -358,6 +387,7 @@ def parse_docx(path: Path) -> list[dict]:
         item_col   = col_map.get("item", col_map.get("tag_no"))
         tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
         current_tag = ""
         for row in rows[data_start:]:
             raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
