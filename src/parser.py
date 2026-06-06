@@ -17,9 +17,10 @@ def _to_date(val: Any) -> date | None:
     if isinstance(val, (datetime, date)):
         return val.date() if isinstance(val, datetime) else val
     if isinstance(val, str):
-        for fmt in ("%Y-%m-%d", "%d-%b-%y", "%d-%b-%Y", "%m/%d/%Y"):
+        val = val.strip().split("\n")[0].strip()
+        for fmt in ("%Y-%m-%d", "%d-%b-%y", "%d-%b-%Y", "%m/%d/%Y", "%d/%m/%Y"):
             try:
-                return datetime.strptime(val.strip(), fmt).date()
+                return datetime.strptime(val, fmt).date()
             except ValueError:
                 pass
     return None
@@ -35,7 +36,6 @@ def _str(val: Any) -> str:
 
 ESP_SHEETS = {"Stationary", "Rotating", "Piping", "Pipeline", "Electrical", "Instrument"}
 
-# Row offsets within each PO block (0-indexed from block start row)
 _PO_LABEL_COL = 1   # column B
 _PO_VAL_COL   = 2   # column C
 _PO_LABEL_MAP = {
@@ -58,36 +58,24 @@ _ROS_COL           = 37  # AL – Required on site
 def _parse_esp_sheet(ws, sheet_name: str, file_name: str) -> list[dict]:
     rows = list(ws.iter_rows(values_only=True))
     records = []
-
-    # Collect PO header info + material rows.
-    # A new PO block starts when column-A (index 0) contains an integer.
     po_info: dict = {}
     in_block = False
 
-    for r_idx, row in enumerate(rows):
-        # detect new PO block
+    for row in rows:
         if isinstance(row[0], (int, float)) and row[0] not in (None,):
-            # flush previous block items already collected (nothing to flush here,
-            # items are emitted row-by-row below with po_info captured)
             po_info = {}
             in_block = True
             _update_po_info(row, po_info)
-            # First material row is on the same row
-            _maybe_add_item(row, po_info, sheet_name, file_name, records)
+            _maybe_add_esp_item(row, po_info, sheet_name, file_name, records)
             continue
 
         if in_block:
-            # Accumulate PO label-value pairs (cols B/C)
             if row[_PO_LABEL_COL] in _PO_LABEL_MAP:
                 key = _PO_LABEL_MAP[row[_PO_LABEL_COL]]
                 val = row[_PO_VAL_COL]
-                if key in ("delivery_date",):
-                    po_info[key] = _to_date(val)
-                else:
-                    po_info[key] = _str(val)
+                po_info[key] = _to_date(val) if key == "delivery_date" else _str(val)
 
-            # Every row in the block that has an item name contributes a record
-            _maybe_add_item(row, po_info, sheet_name, file_name, records)
+            _maybe_add_esp_item(row, po_info, sheet_name, file_name, records)
 
     return records
 
@@ -98,7 +86,7 @@ def _update_po_info(row, po_info: dict):
         po_info[key] = row[_PO_VAL_COL]
 
 
-def _maybe_add_item(row, po_info: dict, sheet: str, file_name: str, out: list):
+def _maybe_add_esp_item(row, po_info: dict, sheet: str, file_name: str, out: list):
     item_name = _str(row[_ITEM_NAME_COL]) if len(row) > _ITEM_NAME_COL else ""
     if not item_name:
         return
@@ -106,28 +94,25 @@ def _maybe_add_item(row, po_info: dict, sheet: str, file_name: str, out: list):
     eta  = _to_date(row[_ETA_COL])  if len(row) > _ETA_COL  else None
     ata  = _to_date(row[_ATA_COL])  if len(row) > _ATA_COL  else None
     ros  = _to_date(row[_ROS_COL])  if len(row) > _ROS_COL  else None
-    sub_ord_received = _to_date(row[_SUB_ORDER_REC_ACT]) if len(row) > _SUB_ORDER_REC_ACT else None
-
-    # Effective delivery date: ATA > ETA > sub_order_received_actual
-    effective_delivery = ata or eta
 
     out.append({
-        "source_file":   file_name,
-        "sheet":         sheet,
-        "mr_no":         po_info.get("mr_no", ""),
-        "mr_name":       po_info.get("mr_name", ""),
-        "po_no":         _str(po_info.get("po_no", "")),
-        "vendor":        po_info.get("vendor", ""),
+        "source_file":       file_name,
+        "sheet":             sheet,
+        "mr_no":             po_info.get("mr_no", ""),
+        "mr_name":           po_info.get("mr_name", ""),
+        "po_no":             _str(po_info.get("po_no", "")),
+        "tag_no":            "",
+        "vendor":            po_info.get("vendor", ""),
         "delivery_location": po_info.get("delivery_location", ""),
-        "ros":           ros or po_info.get("delivery_date"),   # required on site
-        "item_name":     item_name,
-        "qty":           _str(row[_QTY_COL]) if len(row) > _QTY_COL else "",
-        "sub_vendor":    _str(row[_SUB_VENDOR_COL]) if len(row) > _SUB_VENDOR_COL else "",
-        "eta":           eta,
-        "ata":           ata,
-        "effective_delivery": effective_delivery,
-        "sub_order_received": sub_ord_received,
-        "record_type":   "ESP",
+        "ros":               ros or po_info.get("delivery_date"),
+        "item_name":         item_name,
+        "qty":               _str(row[_QTY_COL]) if len(row) > _QTY_COL else "",
+        "sub_vendor":        _str(row[_SUB_VENDOR_COL]) if len(row) > _SUB_VENDOR_COL else "",
+        "eta":               eta,
+        "ata":               ata,
+        "effective_delivery": ata or eta,
+        "sub_order_received": _to_date(row[_SUB_ORDER_REC_ACT]) if len(row) > _SUB_ORDER_REC_ACT else None,
+        "record_type":       "ESP",
     })
 
 
@@ -140,45 +125,79 @@ def parse_esp(path: Path) -> list[dict]:
     return records
 
 
-# ── Sub-order list parser (vendor-prepared, simpler format) ───────────────────
-# Expected columns (flexible detection):
-#   No | Item | Description/Material | Qty | Unit | Sub-Order PO | Sub-Vendor |
+# ── Sub-order list parser ─────────────────────────────────────────────────────
+#
+# Handles vendor-prepared sub-order lists.  The column layout is detected
+# from the first 3 header rows using keyword matching.
+#
+# Typical layout (from the screenshot):
+#   No. | ITEM(tag) | Exp RFP | Act RFP | DESCRIPTION(item_name) | MATERIAL |
+#   Q'ty | UNIT | SUB-ORDER PO NO. | SUB-VENDOR | MFG COUNTRY |
 #   Expected PO issue | PO Deadline | Actual PO issue |
-#   Required Date | Expected Date | Actual Date | Delivered Qty | Note
-
-_SUBORDER_DATE_PATTERNS = [
-    re.compile(r"required|ros|need", re.I),
-    re.compile(r"expected.*date|exp.*date|eta", re.I),
-    re.compile(r"actual.*date|ata|delivered.*date", re.I),
-]
+#   REQUIRED Date(ros) | EXPECTED Date(eta) | ACTUAL Date(ata) | Delivered Q'ty | NOTE
 
 def _detect_suborder_columns(header_rows: list[tuple]) -> dict:
-    """Best-effort column index detection from header rows."""
-    flat = {}
+    """Scan header rows and return best-guess column-index map."""
+    col: dict = {}
+
+    # Priority patterns: later entries in the list win (more specific beats generic)
+    patterns = [
+        # (key, regex, priority)  – higher priority wins ties
+        ("item",       re.compile(r"^item$", re.I),                                1),
+        ("item",       re.compile(r"description|desc\b|品名|材料名", re.I),         2),
+        ("tag_no",     re.compile(r"^item$|tag.?no|equip", re.I),                  1),
+        ("po_no",      re.compile(r"sub.?order.?po|po.?no|purchase.*order", re.I), 1),
+        ("sub_vendor", re.compile(r"sub.?vendor|vendor|supplier|廠商", re.I),       1),
+        ("qty",        re.compile(r"q'?ty|quantity|數量", re.I),                    1),
+        ("unit",       re.compile(r"^unit$|單位", re.I),                            1),
+        ("mfg_country",re.compile(r"mfg.?coun|country|國別", re.I),                1),
+        ("ros",        re.compile(r"required|ros\b|need.*date|需求", re.I),         1),
+        ("ros",        re.compile(r"required.*date|need.*on.*site", re.I),          2),
+        ("eta",        re.compile(r"(?!.*rfp)expected.*date|(?!.*rfp)exp.*date|^eta$|預計.*到", re.I), 1),
+        ("eta",        re.compile(r"^expected\s*date$", re.I),                     2),
+        ("ata",        re.compile(r"actual.*date|ata\b|actual.*deliver|實際", re.I), 1),
+        ("ata",        re.compile(r"^actual\s*date$", re.I),                        2),
+        ("delivered_qty", re.compile(r"delivered.*q|交付.*數", re.I),              1),
+        ("mr_no",      re.compile(r"mr.?no|requisition|請購", re.I),               1),
+        ("po_issue_exp",   re.compile(r"expected.*po|exp.*po.*issue", re.I),       1),
+        ("po_deadline",    re.compile(r"po.*deadline|deadline", re.I),             1),
+        ("po_issue_act",   re.compile(r"actual.*po|po.*actual|act.*po", re.I),     1),
+    ]
+
+    priority: dict[str, int] = {}
+
     for hr in header_rows:
         for ci, cell in enumerate(hr):
-            s = _str(cell).lower()
+            s = _str(cell)
             if not s:
                 continue
-            if re.search(r"item|description|material|品名", s) and "item" not in flat:
-                flat["item"] = ci
-            if re.search(r"po.?no|purchase.*order|sub.?order.?po", s) and "po_no" not in flat:
-                flat["po_no"] = ci
-            if re.search(r"sub.?vendor|vendor|supplier|廠商", s) and "sub_vendor" not in flat:
-                flat["sub_vendor"] = ci
-            if re.search(r"required|ros|need.*date|需求", s) and "ros" not in flat:
-                flat["ros"] = ci
-            if re.search(r"expected.*date|exp.*date|eta|預計.*到", s) and "eta" not in flat:
-                flat["eta"] = ci
-            if re.search(r"actual.*date|ata|actual.*deliver|實際", s) and "ata" not in flat:
-                flat["ata"] = ci
-            if re.search(r"qty|quantity|數量", s) and "qty" not in flat:
-                flat["qty"] = ci
-            if re.search(r"mr.?no|requisition|請購", s) and "mr_no" not in flat:
-                flat["mr_no"] = ci
-            if re.search(r"po.?issue|po.*deadline", s) and "po_issue" not in flat:
-                flat["po_issue"] = ci
-    return flat
+            sl = s.lower()
+            for key, pat, pri in patterns:
+                if pat.search(sl):
+                    if priority.get(key, 0) < pri:
+                        col[key] = ci
+                        priority[key] = pri
+
+    # "item" column should NOT be the same as "tag_no" column when both detected
+    # If description (pri=2) wasn't found, fall back to any text-ish column != tag_no
+    return col
+
+
+def _find_header_end(rows: list[tuple], col_map: dict) -> int:
+    """Return index of first data row (skip header rows)."""
+    # A data row typically has a numeric value in col 0 or a non-empty item cell
+    item_col = col_map.get("item", col_map.get("tag_no", 4))
+    for i, row in enumerate(rows[:6]):
+        if i == 0:
+            continue
+        item_val = _str(row[item_col]) if len(row) > item_col else ""
+        no_val   = row[0] if row else None
+        # first row where col-0 is a number  OR item cell is clearly a material name
+        if isinstance(no_val, (int, float)):
+            return i
+        if item_val and not re.search(r"date|date|vendor|item|qty|required|expected|actual|no\.|unit", item_val, re.I):
+            return i
+    return min(3, len(rows))
 
 
 def parse_suborder_list(path: Path) -> list[dict]:
@@ -188,36 +207,61 @@ def parse_suborder_list(path: Path) -> list[dict]:
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
-        # Find header rows (usually first 1-3 non-empty rows)
-        header_rows = [r for r in rows[:5] if any(c for c in r)]
+
+        header_rows = [r for r in rows[:4] if any(c for c in r)]
         col_map = _detect_suborder_columns(header_rows)
 
-        if "item" not in col_map:
-            continue  # not a recognisable sub-order sheet
+        # Need at least a description/item column
+        if "item" not in col_map and "tag_no" not in col_map:
+            continue
 
-        n_header = len(header_rows)
-        for row in rows[n_header:]:
-            item = _str(row[col_map["item"]]) if col_map.get("item") is not None and len(row) > col_map["item"] else ""
-            if not item:
+        item_col = col_map.get("item", col_map.get("tag_no"))
+        tag_col  = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
+
+        data_start = _find_header_end(rows, col_map)
+
+        # Carry-forward for ITEM (tag) column which may span multiple rows
+        current_tag = ""
+
+        for row in rows[data_start:]:
+            if not any(c for c in row):
                 continue
-            get = lambda key: row[col_map[key]] if key in col_map and len(row) > col_map[key] else None
-            eta = _to_date(get("eta"))
-            ata = _to_date(get("ata"))
-            ros = _to_date(get("ros"))
+
+            # Update carry-forward tag
+            raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
+            if raw_tag:
+                current_tag = " / ".join(raw_tag.splitlines())
+
+            item_name = _str(row[item_col]) if len(row) > item_col else ""
+            if not item_name:
+                continue
+            # Skip summary / status rows
+            if re.search(r"sub.?order.*status|delivery status|total|合計", item_name, re.I):
+                continue
+
+            def gcol(key):
+                ci = col_map.get(key)
+                return row[ci] if ci is not None and len(row) > ci else None
+
+            eta = _to_date(gcol("eta"))
+            ata = _to_date(gcol("ata"))
+            ros = _to_date(gcol("ros"))
+
             records.append({
-                "source_file":        path.name,
-                "sheet":              ws.title,
-                "mr_no":              _str(get("mr_no")),
-                "mr_name":            "",
-                "po_no":              _str(get("po_no")),
-                "vendor":             "",
-                "delivery_location":  "",
-                "ros":                ros,
-                "item_name":          item,
-                "qty":                _str(get("qty")),
-                "sub_vendor":         _str(get("sub_vendor")),
-                "eta":                eta,
-                "ata":                ata,
+                "source_file":       path.name,
+                "sheet":             ws.title,
+                "mr_no":             "",
+                "mr_name":           "",
+                "po_no":             _str(gcol("po_no")),
+                "tag_no":            current_tag,
+                "vendor":            "",
+                "delivery_location": "",
+                "ros":               ros,
+                "item_name":         item_name,
+                "qty":               _str(gcol("qty")),
+                "sub_vendor":        _str(gcol("sub_vendor")),
+                "eta":               eta,
+                "ata":               ata,
                 "effective_delivery": ata or eta,
                 "sub_order_received": None,
                 "record_type":        "SubOrder",
@@ -250,11 +294,10 @@ def load_all_files(folder: str | Path) -> pd.DataFrame:
             print(f"[WARN] Could not parse {f.name}: {e}")
 
     df = pd.DataFrame(all_records) if all_records else pd.DataFrame(columns=[
-        "source_file", "sheet", "mr_no", "mr_name", "po_no", "vendor",
+        "source_file", "sheet", "mr_no", "mr_name", "po_no", "tag_no", "vendor",
         "delivery_location", "ros", "item_name", "qty", "sub_vendor",
         "eta", "ata", "effective_delivery", "sub_order_received", "record_type",
     ])
-    # normalise date columns
     for col in ("ros", "eta", "ata", "effective_delivery", "sub_order_received"):
         df[col] = pd.to_datetime(df[col], errors="coerce")
     return df

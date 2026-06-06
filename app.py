@@ -143,11 +143,12 @@ with tab1:
             eta_str = r["effective_delivery"].strftime("%Y-%m-%d") if pd.notna(r["effective_delivery"]) else "未知"
             ros_str = r["ros"].strftime("%Y-%m-%d") if pd.notna(r["ros"]) else "未定"
             gap_str = f"{int(r['days_ros_gap'])} 天" if pd.notna(r["days_ros_gap"]) else "—"
+            tag_label  = f" `{r['tag_no']}`" if r.get("tag_no") else ""
             vendor_tag = f" | 廠商: **{r['sub_vendor']}**" if r["sub_vendor"] else ""
             icon = "🔴" if alert == "critical" else ("🟠" if alert == "warning" else "🟢")
             st.markdown(f"""
 <div class="{cls}">
-{icon} <b>{r['item_name']}</b>{vendor_tag}<br>
+{icon} <b>{r['item_name']}</b>{tag_label}{vendor_tag}<br>
 &nbsp;&nbsp;📄 PO: {r['po_no']} &nbsp;|&nbsp; 請購單: {r['mr_no']} &nbsp;|&nbsp; 來源: {r['source_file']}<br>
 &nbsp;&nbsp;🚚 預計到料: <b>{eta_str}</b> &nbsp;|&nbsp; 需求時間(ROS): {ros_str} &nbsp;|&nbsp; 差距: {gap_str}
 </div>""", unsafe_allow_html=True)
@@ -179,6 +180,7 @@ with tab2:
             "警示等級": "警示",
             "mr_no": "請購單號",
             "po_no": "PO編號",
+            "tag_no": "設備Tag",
             "item_name": "材料名稱",
             "sub_vendor": "次廠商",
             "vendor": "主廠商",
@@ -314,6 +316,7 @@ with tab4:
         "source_file": "來源檔案",
         "mr_no": "請購單號",
         "po_no": "PO編號",
+        "tag_no": "設備Tag",
         "item_name": "材料名稱",
         "qty": "數量",
         "vendor": "主廠商",
