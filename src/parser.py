@@ -137,38 +137,74 @@ def parse_esp(path: Path) -> list[dict]:
 #   REQUIRED Date(ros) | EXPECTED Date(eta) | ACTUAL Date(ata) | Delivered Q'ty | NOTE
 
 def _detect_suborder_columns(header_rows: list[tuple]) -> dict:
-    """Scan header rows and return best-guess column-index map."""
+    """
+    Scan up to 5 header rows, match each cell against keyword patterns,
+    and return a best-guess column-index map.
+    Supports both English ESP/SubOrder formats and Chinese 送審管制 formats.
+    Higher priority wins when two rows both match the same key.
+    """
     col: dict = {}
 
-    # Priority patterns: later entries in the list win (more specific beats generic)
     patterns = [
-        # (key, regex, priority)  – higher priority wins ties
-        ("item",       re.compile(r"^item$", re.I),                                1),
-        ("item",       re.compile(r"description|desc\b|品名|材料名", re.I),         2),
-        ("tag_no",     re.compile(r"^item$|tag.?no|equip", re.I),                  1),
-        ("po_no",      re.compile(r"sub.?order.?po|po.?no|purchase.*order", re.I), 1),
-        ("sub_vendor", re.compile(r"sub.?vendor|vendor|supplier|廠商", re.I),       1),
-        ("qty",        re.compile(r"q'?ty|quantity|數量", re.I),                    1),
-        ("unit",       re.compile(r"^unit$|單位", re.I),                            1),
-        ("mfg_country",re.compile(r"mfg.?coun|country|國別", re.I),                1),
-        ("ros",        re.compile(r"required|ros\b|need.*date|需求", re.I),         1),
-        ("ros",        re.compile(r"required.*date|need.*on.*site", re.I),          2),
-        ("eta",        re.compile(r"(?!.*rfp)expected.*date|(?!.*rfp)exp.*date|^eta$|預計.*到", re.I), 1),
-        ("eta",        re.compile(r"^expected\s*date$", re.I),                     2),
-        ("ata",        re.compile(r"actual.*date|ata\b|actual.*deliver|實際", re.I), 1),
-        ("ata",        re.compile(r"^actual\s*date$", re.I),                        2),
-        ("delivered_qty", re.compile(r"delivered.*q|交付.*數", re.I),              1),
-        ("mr_no",      re.compile(r"mr.?no|requisition|請購", re.I),               1),
-        ("po_issue_exp",   re.compile(r"expected.*po|exp.*po.*issue", re.I),       1),
-        ("po_deadline",    re.compile(r"po.*deadline|deadline", re.I),             1),
-        ("po_issue_act",   re.compile(r"actual.*po|po.*actual|act.*po", re.I),     1),
+        # ── item / material name ──────────────────────────────────────────────
+        ("item", re.compile(r"^item$", re.I),                                             1),
+        ("item", re.compile(r"description|desc\b|品名|材料名稱?|文件$|設備名稱", re.I),    2),
+        ("item", re.compile(r"^設備名稱|^material\s*name|^document\s*name", re.I),         3),
+
+        # ── tag / equipment number ────────────────────────────────────────────
+        ("tag_no", re.compile(r"^item$|tag.?no|equip(ment)?(\s*no)?$", re.I),            1),
+
+        # ── document / PO number ─────────────────────────────────────────────
+        # Must NOT match RFP/issue/deadline/date columns
+        ("po_no", re.compile(r"sub.?order.?po|^po[\s#\.]*no\b|po\s*number|po\s*num\b",
+                              re.I),                                                       1),
+        ("po_no", re.compile(r"^purchase\s*order\s*no|^編碼$|^文件編碼|^doc(ument)?\s*(no|code)",
+                              re.I),                                                       2),
+
+        # ── sub-vendor ───────────────────────────────────────────────────────
+        ("sub_vendor", re.compile(r"sub.?vendor|vendor|supplier|廠商|統包商", re.I),       1),
+
+        # ── quantity / unit ───────────────────────────────────────────────────
+        ("qty",  re.compile(r"q'?ty|quantity|數量", re.I),                                 1),
+        ("unit", re.compile(r"^unit$|單位", re.I),                                         1),
+
+        # ── Required On Site (ROS) ────────────────────────────────────────────
+        # English
+        ("ros", re.compile(r"required|ros\b|need.*date", re.I),                           1),
+        ("ros", re.compile(r"required.*date|need.*on.*site", re.I),                        2),
+        # Chinese 送審管制格式
+        ("ros", re.compile(r"預定進場|需求.*日期|預計進場", re.I),                           3),
+
+        # ── Expected delivery / ETA ───────────────────────────────────────────
+        # Exclude RFP, issue, deadline, 送審 columns
+        ("eta", re.compile(
+            r"(?!.*rfp)(?!.*issue)(?!.*deadline)(?!.*送審)expected.*date|^eta$|預計.*到",
+            re.I),                                                                          1),
+        ("eta", re.compile(r"^expected\s*date$", re.I),                                    2),
+        ("eta", re.compile(r"預定廠驗|預計.*交貨|預計.*到料", re.I),                         3),
+
+        # ── Actual delivery / ATA ─────────────────────────────────────────────
+        ("ata", re.compile(
+            r"(?!.*rfp)(?!.*issue)actual.*date|^ata$|實際.*到",
+            re.I),                                                                          1),
+        ("ata", re.compile(r"^actual\s*date$", re.I),                                      2),
+        ("ata", re.compile(r"實際.*進場|實際.*交貨|實際.*到料", re.I),                        3),
+
+        # ── misc ─────────────────────────────────────────────────────────────
+        ("delivered_qty", re.compile(r"delivered.*q|交付.*數", re.I),                      1),
+        ("mr_no",         re.compile(r"mr.?no|requisition|請購", re.I),                    1),
+        ("po_issue_exp",  re.compile(r"expected.*po|exp.*po.*issue|預定送審", re.I),        1),
+        ("po_deadline",   re.compile(r"po.*deadline|deadline", re.I),                      1),
+        ("po_issue_act",  re.compile(r"actual.*po|po.*actual|act.*po", re.I),              1),
+        ("spec",          re.compile(r"規範|spec(ification)?", re.I),                      1),
+        ("warning_days",  re.compile(r"預警|warning.*day|送審.*延遲", re.I),               1),
     ]
 
     priority: dict[str, int] = {}
 
     for hr in header_rows:
         for ci, cell in enumerate(hr):
-            s = _str(cell)
+            s = _str(cell).split("\n")[0]   # only first line of merged headers
             if not s:
                 continue
             sl = s.lower()
@@ -178,8 +214,31 @@ def _detect_suborder_columns(header_rows: list[tuple]) -> dict:
                         col[key] = ci
                         priority[key] = pri
 
-    # "item" column should NOT be the same as "tag_no" column when both detected
-    # If description (pri=2) wasn't found, fall back to any text-ish column != tag_no
+    return col
+
+
+def _validate_columns(col: dict, data_rows: list[tuple]) -> dict:
+    """
+    Post-detection sanity check: if a column that should contain text (po_no,
+    sub_vendor, item_name) instead contains mostly date-like values, discard it.
+    """
+    _date_pat = re.compile(
+        r"^\d{1,2}[/-]\w{2,3}[/-]\d{2,4}$|^\d{4}[/-]\d{2}[/-]\d{2}$|"
+        r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$", re.I
+    )
+    sample = data_rows[:10]
+
+    def _is_date_col(ci: int) -> bool:
+        vals = [_str(r[ci]) for r in sample if len(r) > ci and _str(r[ci])]
+        if not vals:
+            return False
+        date_hits = sum(1 for v in vals if _date_pat.match(v) or isinstance(v, (datetime, date)))
+        return date_hits / len(vals) >= 0.6
+
+    for key in ("po_no", "mr_no"):
+        if key in col and _is_date_col(col[key]):
+            del col[key]
+
     return col
 
 
@@ -215,10 +274,10 @@ def parse_suborder_list(path: Path) -> list[dict]:
         if "item" not in col_map and "tag_no" not in col_map:
             continue
 
-        item_col = col_map.get("item", col_map.get("tag_no"))
-        tag_col  = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
-
+        item_col   = col_map.get("item", col_map.get("tag_no"))
+        tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
 
         # Carry-forward for ITEM (tag) column which may span multiple rows
         current_tag = ""
@@ -269,6 +328,119 @@ def parse_suborder_list(path: Path) -> list[dict]:
     return records
 
 
+# ── 送審管制表 parser ─────────────────────────────────────────────────────────
+# Format: 新竹/各廠 材料設備送審管制總表
+# Each equipment item spans multiple rows (one per revision version).
+# The "main" row is identified by having a non-empty 項次 (sequence no) AND 設備名稱.
+# Key columns (detected by header keywords):
+#   設備名稱 → item_name
+#   文件編碼  → po_no
+#   預定進場  → ros   (required on site)
+#   預定廠驗  → eta   (expected delivery / factory inspection)
+#   廠商 / 統包商 → sub_vendor
+
+_SUBMISSION_SHEET_PAT = re.compile(r"送審|管制|submission|submittal", re.I)
+
+def _is_submission_control(wb) -> bool:
+    """Detect 送審管制 format by checking sheet names OR first-row cell content."""
+    # Check sheet names first (fast)
+    if any(_SUBMISSION_SHEET_PAT.search(s) for s in wb.sheetnames):
+        return True
+    # Check title cells in first 2 rows of each sheet
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(min_row=1, max_row=2, values_only=True):
+            for cell in row:
+                if cell and _SUBMISSION_SHEET_PAT.search(_str(cell)):
+                    return True
+    return False
+
+
+def _parse_submission_sheet(ws, sheet_name: str, file_name: str) -> list[dict]:
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+
+    # Header rows: scan first 5 non-empty rows
+    header_rows = [r for r in rows[:6] if any(c for c in r)][:5]
+    col_map = _detect_suborder_columns(header_rows)
+
+    item_col = col_map.get("item")
+    if item_col is None:
+        return []
+
+    po_col      = col_map.get("po_no")
+    ros_col     = col_map.get("ros")
+    eta_col     = col_map.get("eta")
+    ata_col     = col_map.get("ata")
+    vendor_col  = col_map.get("sub_vendor")
+    warn_col    = col_map.get("warning_days")
+
+    # Find data start: first row where col 0 or a "no." column is numeric
+    # or where item_col has a non-header value
+    data_start = _find_header_end(rows, col_map)
+
+    records = []
+    seen_items: set = set()
+
+    for row in rows[data_start:]:
+        item_raw = _str(row[item_col]) if len(row) > item_col else ""
+        item_name = item_raw.split("\n")[0].strip()   # first line only
+        if not item_name:
+            continue
+        if re.search(r"合計|小計|total|subtotal|^\d+$", item_name, re.I):
+            continue
+        # Skip header-like rows that slipped through
+        if re.search(r"^(文件|設備名稱|item|description|材料名稱|編碼)$", item_name, re.I):
+            continue
+
+        # De-duplicate: 送審管制表 has multiple revision rows per item.
+        # Keep only the first occurrence (latest data is on the main/first row).
+        key = (sheet_name, item_name)
+        if key in seen_items:
+            continue
+        seen_items.add(key)
+
+        def g(ci):
+            return row[ci] if ci is not None and len(row) > ci else None
+
+        ros = _to_date(g(ros_col))
+        eta = _to_date(g(eta_col))
+        ata = _to_date(g(ata_col))
+
+        records.append({
+            "source_file":        file_name,
+            "sheet":              sheet_name,
+            "mr_no":              "",
+            "mr_name":            "",
+            "po_no":              _str(g(po_col)).split("\n")[0],
+            "tag_no":             "",
+            "vendor":             "",
+            "delivery_location":  "",
+            "ros":                ros,
+            "item_name":          item_name,
+            "qty":                "",
+            "sub_vendor":         _str(g(vendor_col)).split("\n")[0],
+            "eta":                eta,
+            "ata":                ata,
+            "effective_delivery": ata or eta or ros,
+            "sub_order_received": None,
+            "record_type":        "送審管制",
+        })
+
+    return records
+
+
+def parse_submission_control(path: Path) -> list[dict]:
+    wb = openpyxl.load_workbook(str(path), data_only=True)
+    records = []
+    for sname in wb.sheetnames:
+        ws = wb[sname]
+        if ws.max_row < 3:
+            continue
+        records.extend(_parse_submission_sheet(ws, sname, path.name))
+    return records
+
+
 # ── PDF parser ───────────────────────────────────────────────────────────────
 
 def _pdf_sheet_rows(path: Path) -> list[tuple[str, list[tuple]]]:
@@ -298,6 +470,7 @@ def parse_pdf(path: Path) -> list[dict]:
         item_col   = col_map.get("item", col_map.get("tag_no"))
         tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
         current_tag = ""
         for row in rows[data_start:]:
             raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
@@ -358,6 +531,7 @@ def parse_docx(path: Path) -> list[dict]:
         item_col   = col_map.get("item", col_map.get("tag_no"))
         tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
         data_start = _find_header_end(rows, col_map)
+        col_map    = _validate_columns(col_map, rows[data_start:])
         current_tag = ""
         for row in rows[data_start:]:
             raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
@@ -401,10 +575,20 @@ def _is_esp_file(path: Path) -> bool:
 
 
 def parse_file(path: Path) -> list[dict]:
-    """Dispatch to the right parser based on file extension."""
+    """Auto-detect format and dispatch to the right parser."""
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xls"):
-        return parse_esp(path) if _is_esp_file(path) else parse_suborder_list(path)
+        if _is_esp_file(path):
+            return parse_esp(path)
+        try:
+            wb = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+            is_submission = _is_submission_control(wb)
+            wb.close()
+        except Exception:
+            is_submission = False
+        if is_submission:
+            return parse_submission_control(path)
+        return parse_suborder_list(path)
     if ext == ".pdf":
         return parse_pdf(path)
     if ext in (".docx", ".doc"):
