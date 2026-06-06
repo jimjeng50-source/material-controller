@@ -59,14 +59,41 @@ with st.sidebar:
             "拖拉或點選上傳報告檔案",
             type=["xlsx", "xls", "pdf", "docx", "doc"],
             accept_multiple_files=True,
-            help="支援 Excel (ESP報告/Sub-Order List)、PDF、Word 文件，可一次上傳多個檔案",
+            help="支援 Excel (ESP報告/Sub-Order List/送審管制)、PDF、Word，可一次上傳多個檔案",
         )
         st.markdown("</div>", unsafe_allow_html=True)
         if uploaded_files:
             st.success(f"已上傳 {len(uploaded_files)} 個檔案")
             for f in uploaded_files:
                 st.caption(f"• {f.name}")
+
+        # ── AI 判讀選項 ──────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🤖 AI 智慧判讀")
+        use_ai = st.toggle(
+            "啟用 AI 判讀（格式不符時自動辨識欄位）",
+            value=False,
+            help="由 Claude AI 分析表格結構，自動對應欄位。適合格式特殊或無法正常解析的報告。",
+        )
+        ai_api_key = ""
+        if use_ai:
+            # Check secrets first (for Streamlit Cloud deployment)
+            try:
+                ai_api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            except Exception:
+                ai_api_key = ""
+            if not ai_api_key:
+                ai_api_key = st.text_input(
+                    "Anthropic API Key",
+                    type="password",
+                    placeholder="sk-ant-...",
+                    help="前往 console.anthropic.com 取得 API Key。部署到 Streamlit Cloud 時可設定為 Secrets。",
+                )
+            else:
+                st.caption("✅ API Key 已從 Streamlit Secrets 載入")
     else:
+        use_ai = False
+        ai_api_key = ""
         data_dir = st.text_input("資料夾路徑", str(DEFAULT_DATA_DIR))
         st.caption("支援 ESP 報告與廠商 Sub-Order List（自動判別）")
         if st.button("🔄 重新載入資料", use_container_width=True):
@@ -91,35 +118,70 @@ def load_from_folder(folder: str) -> pd.DataFrame:
     return load_all_files(folder)
 
 
-def load_from_uploads(files) -> pd.DataFrame:
-    """Parse uploaded file objects using a temp dir."""
+def load_from_uploads(files, use_ai: bool = False, api_key: str = "") -> tuple[pd.DataFrame, list]:
+    """Parse uploaded files. Returns (DataFrame, ai_mapping_log)."""
     all_records = []
+    ai_log = []
+
     with tempfile.TemporaryDirectory() as tmp:
         for uf in files:
             dest = Path(tmp) / uf.name
             dest.write_bytes(uf.getvalue())
             try:
-                all_records.extend(parse_file(dest))
+                if use_ai and api_key and dest.suffix.lower() in (".xlsx", ".xls"):
+                    from ai_parser import parse_with_ai
+                    recs, log = parse_with_ai(dest, api_key)
+                    all_records.extend(recs)
+                    ai_log.extend(log)
+                    # Fallback: if AI returned nothing, try rule-based parser
+                    if not recs:
+                        fallback = parse_file(dest)
+                        all_records.extend(fallback)
+                else:
+                    all_records.extend(parse_file(dest))
             except Exception as e:
                 st.warning(f"⚠️ 無法解析 {uf.name}：{e}")
+
     if not all_records:
-        return pd.DataFrame()
+        return pd.DataFrame(), ai_log
     df = pd.DataFrame(all_records)
     for col in ("ros", "eta", "ata", "effective_delivery", "sub_order_received"):
         df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df
+    return df, ai_log
 
 
 if data_mode == "⬆️ 上傳 Excel 檔案":
     if not uploaded_files:
-        st.info("👈 請從左側側邊欄上傳 Excel 報告（ESP 報告或廠商 Sub-Order List）")
+        st.info("👈 請從左側側邊欄上傳 Excel 報告（ESP 報告、Sub-Order List、送審管制表等）")
         st.stop()
-    df_raw = load_from_uploads(uploaded_files)
+    if use_ai and not ai_api_key:
+        st.warning("⚠️ 請輸入 Anthropic API Key 才能啟用 AI 判讀。")
+        st.stop()
+
+    with st.spinner("解析中…" + ("（AI 判讀模式）" if use_ai else "")):
+        df_raw, ai_mapping_log = load_from_uploads(uploaded_files, use_ai, ai_api_key)
+
+    # Show AI mapping result
+    if use_ai and ai_mapping_log:
+        with st.expander("🤖 AI 欄位判讀結果", expanded=True):
+            field_labels = {
+                "item_name": "材料名稱", "po_no": "PO/文件編碼",
+                "tag_no": "設備Tag", "sub_vendor": "次廠商",
+                "ros": "需求日期(ROS)", "eta": "預計到料(ETA)",
+                "ata": "實際到料(ATA)", "qty": "數量",
+            }
+            for entry in ai_mapping_log:
+                icon = "✅" if entry["status"] == "成功" else "⚠️"
+                st.markdown(f"**{icon} {entry['sheet']}** — {entry['status']}")
+                if entry.get("mapping"):
+                    cols_found = {field_labels.get(k, k): f"欄 {v}" for k, v in entry["mapping"].items()}
+                    st.json(cols_found, expanded=False)
 else:
-    df_raw = load_from_folder(data_dir)
+    df_raw, ai_mapping_log = load_from_folder(data_dir), []
 
 if df_raw.empty:
-    st.warning("⚠️ 找不到任何可解析的資料，請確認檔案格式後重新上傳。")
+    hint = "請確認檔案格式，或啟用左側「AI 判讀」模式重新上傳。" if data_mode == "⬆️ 上傳 Excel 檔案" else "請確認資料夾路徑並放入報告後重新載入。"
+    st.warning(f"⚠️ 找不到任何可解析的資料。{hint}")
     st.stop()
 
 
