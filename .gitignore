@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+# .streamlit/  ← keep config.toml in repo for Cloud deployment
+*.egg-info/
+.env
