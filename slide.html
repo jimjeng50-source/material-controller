@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>材料到料時程警示儀表板</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+    background: #0f1c2e;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; padding: 20px;
+  }
+  .slide {
+    width: 1280px; height: 720px;
+    background: linear-gradient(135deg, #0f1c2e 0%, #1a2f4a 100%);
+    border-radius: 16px;
+    padding: 40px 48px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  }
+
+  /* background decoration */
+  .slide::before {
+    content: "";
+    position: absolute; top: -120px; right: -120px;
+    width: 420px; height: 420px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%);
+  }
+
+  /* ── HEADER ── */
+  .header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 28px;
+  }
+  .header-icon { font-size: 2.4rem; }
+  .header-text h1 {
+    font-size: 1.75rem; font-weight: 800;
+    color: #e2eaf6; letter-spacing: .5px;
+  }
+  .header-text p {
+    font-size: .85rem; color: #7da4cc; margin-top: 2px;
+  }
+  .badge {
+    margin-left: auto;
+    background: rgba(59,130,246,0.2);
+    border: 1px solid rgba(59,130,246,0.4);
+    color: #93c5fd;
+    font-size: .72rem; font-weight: 600;
+    padding: 4px 12px; border-radius: 999px;
+  }
+
+  /* ── GRID ── */
+  .grid {
+    display: grid;
+    grid-template-columns: 220px 1fr 230px;
+    grid-template-rows: 1fr 1fr;
+    gap: 14px;
+    height: calc(100% - 110px);
+  }
+
+  /* ── CARDS ── */
+  .card {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 12px;
+    padding: 16px 18px;
+    position: relative;
+  }
+  .card h3 {
+    font-size: .78rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+
+  /* ── INPUT CARD (col 1, row 1+2 merged) ── */
+  .card-input {
+    grid-column: 1; grid-row: 1 / 3;
+    border-top: 3px solid #3b82f6;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .card-input h3 { color: #60a5fa; }
+  .fmt-item {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 8px; padding: 8px 12px;
+  }
+  .fmt-icon { font-size: 1.4rem; flex-shrink: 0; }
+  .fmt-text { font-size: .78rem; color: #cbd5e1; line-height: 1.4; }
+  .fmt-text strong { color: #e2eaf6; display: block; font-size: .82rem; }
+  .ai-badge {
+    margin-top: auto;
+    background: linear-gradient(90deg, #7c3aed, #4f46e5);
+    border-radius: 8px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .ai-badge .ai-icon { font-size: 1.3rem; }
+  .ai-badge p { font-size: .75rem; color: #e0d9ff; line-height: 1.4; }
+  .ai-badge strong { color: #fff; font-size: .8rem; }
+
+  /* ── FLOW arrow (middle) ── */
+  .arrow-col {
+    grid-column: 2; grid-row: 1 / 3;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+
+  /* ── PIPELINE CARD ── */
+  .card-pipeline {
+    border-top: 3px solid #10b981;
+    height: 100%;
+  }
+  .card-pipeline h3 { color: #34d399; }
+  .pipeline {
+    display: flex; align-items: center; gap: 0;
+    margin-top: 6px; flex-wrap: nowrap;
+  }
+  .pipe-step {
+    flex: 1; text-align: center;
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.25);
+    border-radius: 8px; padding: 8px 6px;
+    font-size: .72rem; color: #a7f3d0; line-height: 1.4;
+  }
+  .pipe-step span { font-size: 1.1rem; display: block; margin-bottom: 3px; }
+  .pipe-arrow {
+    color: #34d399; font-size: 1rem; padding: 0 4px; flex-shrink: 0;
+  }
+
+  /* ── DASHBOARD CARD ── */
+  .card-dashboard {
+    border-top: 3px solid #f59e0b;
+  }
+  .card-dashboard h3 { color: #fbbf24; }
+  .tabs {
+    display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap;
+  }
+  .tab {
+    font-size: .71rem; padding: 5px 10px; border-radius: 6px;
+    font-weight: 600;
+  }
+  .tab-1 { background: rgba(59,130,246,0.2); color: #93c5fd; }
+  .tab-2 { background: rgba(239,68,68,0.2);  color: #fca5a5; }
+  .tab-3 { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+  .tab-4 { background: rgba(168,85,247,0.2); color: #d8b4fe; }
+  .tab-desc { margin-top: 8px; }
+  .tab-desc p {
+    font-size: .72rem; color: #94a3b8; margin: 3px 0;
+    padding-left: 8px; border-left: 2px solid rgba(255,255,255,0.12);
+  }
+
+  /* ── ALERT CARD (col 3, row 1+2) ── */
+  .card-alert {
+    grid-column: 3; grid-row: 1 / 3;
+    border-top: 3px solid #ef4444;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .card-alert h3 { color: #f87171; }
+  .alert-item {
+    border-radius: 8px; padding: 10px 12px;
+    font-size: .75rem; line-height: 1.5;
+  }
+  .alert-red    { background: rgba(239,68,68,0.15);  border-left: 3px solid #ef4444; color: #fca5a5; }
+  .alert-orange { background: rgba(245,158,11,0.15); border-left: 3px solid #f59e0b; color: #fcd34d; }
+  .alert-green  { background: rgba(16,185,129,0.15); border-left: 3px solid #10b981; color: #6ee7b7; }
+  .alert-item strong { display: block; font-size: .8rem; margin-bottom: 2px; }
+  .logic-box {
+    margin-top: auto;
+    background: rgba(255,255,255,0.05);
+    border-radius: 8px; padding: 10px 12px;
+    font-size: .71rem; color: #94a3b8; line-height: 1.6;
+  }
+  .logic-box strong { color: #e2eaf6; display: block; margin-bottom: 4px; font-size: .75rem; }
+  code {
+    background: rgba(255,255,255,0.1); border-radius: 3px;
+    padding: 1px 4px; font-family: monospace; color: #c4b5fd;
+  }
+
+  /* ── FOOTER ── */
+  .footer {
+    position: absolute; bottom: 14px; left: 48px; right: 48px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .footer span { font-size: .68rem; color: #475569; }
+  .tech-pills { display: flex; gap: 6px; }
+  .pill {
+    font-size: .65rem; padding: 2px 8px; border-radius: 999px;
+    background: rgba(255,255,255,0.07); color: #64748b; border: 1px solid rgba(255,255,255,0.08);
+  }
+</style>
+</head>
+<body>
+<div class="slide">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-icon">📦</div>
+    <div class="header-text">
+      <h1>材料到料時程警示儀表板</h1>
+      <p>Material Delivery Schedule Alert Dashboard</p>
+    </div>
+    <div class="badge">Streamlit Cloud · Free Tier</div>
+  </div>
+
+  <!-- GRID -->
+  <div class="grid">
+
+    <!-- COL 1: INPUT -->
+    <div class="card card-input">
+      <h3>📂 資料輸入</h3>
+
+      <div class="fmt-item">
+        <div class="fmt-icon">📊</div>
+        <div class="fmt-text">
+          <strong>ESP 報告</strong>
+          採購管理系統匯出<br>Stationary / Rotating…
+        </div>
+      </div>
+
+      <div class="fmt-item">
+        <div class="fmt-icon">📋</div>
+        <div class="fmt-text">
+          <strong>廠商 Sub-Order List</strong>
+          細料到貨狀況表<br>含 PO、ETA、ROS
+        </div>
+      </div>
+
+      <div class="fmt-item">
+        <div class="fmt-icon">🏗️</div>
+        <div class="fmt-text">
+          <strong>送審管制表</strong>
+          預定進場 / 預定廠驗<br>中文欄位自動辨識
+        </div>
+      </div>
+
+      <div class="fmt-item">
+        <div class="fmt-icon">📄</div>
+        <div class="fmt-text">
+          <strong>PDF / Word</strong>
+          表格自動擷取<br>欄位關鍵字比對
+        </div>
+      </div>
+
+      <div class="ai-badge">
+        <div class="ai-icon">🤖</div>
+        <p><strong>AI 智慧判讀（Gemini）</strong>
+          格式不符？AI 自動分析表頭，對應正確欄位。免費額度可用。</p>
+      </div>
+    </div>
+
+    <!-- COL 2 ROW 1: PIPELINE -->
+    <div class="card card-pipeline arrow-col" style="grid-row:1; display:block;">
+      <h3>⚙️ 解析流程</h3>
+      <div class="pipeline">
+        <div class="pipe-step"><span>📁</span>上傳<br>檔案</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span>🔍</span>格式<br>偵測</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span>🗂️</span>欄位<br>對應</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span>📅</span>日期<br>擷取</div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step"><span>⚡</span>警示<br>計算</div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+        <span style="font-size:.7rem; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.2); color:#6ee7b7; border-radius:6px; padding:3px 8px;">✓ 自動判別 ESP / SubOrder / 送審管制</span>
+        <span style="font-size:.7rem; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.2); color:#6ee7b7; border-radius:6px; padding:3px 8px;">✓ 中英文欄位名稱皆支援</span>
+        <span style="font-size:.7rem; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.2); color:#6ee7b7; border-radius:6px; padding:3px 8px;">✓ 多檔案同時上傳</span>
+        <span style="font-size:.7rem; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.2); color:#6ee7b7; border-radius:6px; padding:3px 8px;">✓ 版次子列自動去重</span>
+      </div>
+    </div>
+
+    <!-- COL 2 ROW 2: DASHBOARD TABS -->
+    <div class="card card-dashboard" style="grid-column:2; grid-row:2;">
+      <h3>📊 儀表板功能</h3>
+      <div class="tabs">
+        <div class="tab tab-1">📅 本週 &amp; 次週到料</div>
+        <div class="tab tab-2">⚠️ 警示清單</div>
+        <div class="tab tab-3">📊 甘特時程圖</div>
+        <div class="tab tab-4">📋 全部明細</div>
+      </div>
+      <div class="tab-desc">
+        <p>🗓️ 本週 / 次週預計到料材料一覽，顯示 PO、廠商、Tag 號</p>
+        <p>🔴🟠 預計到料 vs 需求日期差距 ≤ 閾值（預設 30 天）自動標色</p>
+        <p>📈 Gantt 甘特圖 + 散佈圖，可依 PO 篩選、調整顯示週數</p>
+        <p>⬇️ 所有分頁支援下載 CSV，可搜尋材料 / PO / 廠商名稱</p>
+      </div>
+    </div>
+
+    <!-- COL 3: ALERT -->
+    <div class="card card-alert">
+      <h3>🚨 警示邏輯</h3>
+
+      <div class="alert-item alert-red">
+        <strong>🔴 緊急</strong>
+        預計到料日 &gt; 需求日期<br>差距 ≤ 0 天（已逾期）
+      </div>
+
+      <div class="alert-item alert-orange">
+        <strong>🟠 注意</strong>
+        差距 ≤ 30 天<br>（閾值可自訂 7–90 天）
+      </div>
+
+      <div class="alert-item alert-green">
+        <strong>🟢 正常</strong>
+        差距充足，<br>無需立即關注
+      </div>
+
+      <div class="alert-item" style="background:rgba(99,102,241,0.15); border-left:3px solid #818cf8; color:#c7d2fe;">
+        <strong>✅ 已到料</strong>
+        ATA 欄位有值，<br>顯示實際到料日期
+      </div>
+
+      <div class="logic-box">
+        <strong>⚙️ 計算邏輯</strong>
+        有效交期 = <code>ATA</code> &gt; <code>ETA</code> &gt; <code>ROS</code><br>
+        差距 = 有效交期 − 需求日期<br>
+        基準日期 / 閾值可在側邊欄調整
+      </div>
+    </div>
+
+  </div><!-- /grid -->
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <span>資料不離開瀏覽器 · 每次上傳即時解析 · 不儲存於伺服器</span>
+    <div class="tech-pills">
+      <span class="pill">Python</span>
+      <span class="pill">Streamlit</span>
+      <span class="pill">Plotly</span>
+      <span class="pill">openpyxl</span>
+      <span class="pill">pdfplumber</span>
+      <span class="pill">Gemini AI</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
