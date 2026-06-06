@@ -16,7 +16,7 @@ DEFAULT_DATA_DIR = ROOT / "data"
 
 import sys
 sys.path.insert(0, str(ROOT / "src"))
-from parser import load_all_files, parse_esp, parse_suborder_list, _is_esp_file
+from parser import load_all_files, parse_file, _is_esp_file
 
 # ── page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -56,10 +56,10 @@ with st.sidebar:
     if data_mode == "⬆️ 上傳 Excel 檔案":
         st.markdown('<div class="upload-box">', unsafe_allow_html=True)
         uploaded_files = st.file_uploader(
-            "拖拉或點選上傳 Excel 報告",
-            type=["xlsx", "xls"],
+            "拖拉或點選上傳報告檔案",
+            type=["xlsx", "xls", "pdf", "docx", "doc"],
             accept_multiple_files=True,
-            help="支援 ESP 報告與廠商 Sub-Order List，可一次上傳多個檔案",
+            help="支援 Excel (ESP報告/Sub-Order List)、PDF、Word 文件，可一次上傳多個檔案",
         )
         st.markdown("</div>", unsafe_allow_html=True)
         if uploaded_files:
@@ -92,17 +92,14 @@ def load_from_folder(folder: str) -> pd.DataFrame:
 
 
 def load_from_uploads(files) -> pd.DataFrame:
-    """Parse uploaded file objects (BytesIO) using a temp dir."""
+    """Parse uploaded file objects using a temp dir."""
     all_records = []
     with tempfile.TemporaryDirectory() as tmp:
         for uf in files:
             dest = Path(tmp) / uf.name
             dest.write_bytes(uf.getvalue())
             try:
-                if _is_esp_file(dest):
-                    all_records.extend(parse_esp(dest))
-                else:
-                    all_records.extend(parse_suborder_list(dest))
+                all_records.extend(parse_file(dest))
             except Exception as e:
                 st.warning(f"⚠️ 無法解析 {uf.name}：{e}")
     if not all_records:
