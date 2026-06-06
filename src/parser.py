@@ -269,6 +269,125 @@ def parse_suborder_list(path: Path) -> list[dict]:
     return records
 
 
+# ── PDF parser ───────────────────────────────────────────────────────────────
+
+def _pdf_sheet_rows(path: Path) -> list[tuple[str, list[tuple]]]:
+    """Extract tables from each PDF page, return list of (sheet_name, rows)."""
+    import pdfplumber
+    sheets = []
+    with pdfplumber.open(str(path)) as pdf:
+        for i, page in enumerate(pdf.pages):
+            tables = page.extract_tables()
+            for j, table in enumerate(tables):
+                rows = [tuple(cell if cell is not None else "" for cell in row)
+                        for row in table if any(cell for cell in row)]
+                if rows:
+                    sheets.append((f"Page{i+1}_T{j+1}", rows))
+    return sheets
+
+
+def parse_pdf(path: Path) -> list[dict]:
+    records = []
+    for sheet_name, rows in _pdf_sheet_rows(path):
+        if not rows:
+            continue
+        header_rows = rows[:4]
+        col_map = _detect_suborder_columns(header_rows)
+        if "item" not in col_map and "tag_no" not in col_map:
+            continue
+        item_col   = col_map.get("item", col_map.get("tag_no"))
+        tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
+        data_start = _find_header_end(rows, col_map)
+        current_tag = ""
+        for row in rows[data_start:]:
+            raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
+            if raw_tag:
+                current_tag = " / ".join(raw_tag.splitlines())
+            item_name = _str(row[item_col]) if len(row) > item_col else ""
+            if not item_name:
+                continue
+            if re.search(r"sub.?order.*status|delivery status|total|合計", item_name, re.I):
+                continue
+            def gcol(key, r=row):
+                ci = col_map.get(key)
+                return r[ci] if ci is not None and len(r) > ci else None
+            eta = _to_date(gcol("eta"))
+            ata = _to_date(gcol("ata"))
+            ros = _to_date(gcol("ros"))
+            records.append({
+                "source_file": path.name, "sheet": sheet_name,
+                "mr_no": "", "mr_name": "",
+                "po_no": _str(gcol("po_no")), "tag_no": current_tag,
+                "vendor": "", "delivery_location": "", "ros": ros,
+                "item_name": item_name, "qty": _str(gcol("qty")),
+                "sub_vendor": _str(gcol("sub_vendor")),
+                "eta": eta, "ata": ata,
+                "effective_delivery": ata or eta,
+                "sub_order_received": None, "record_type": "PDF",
+            })
+    return records
+
+
+# ── Word (.docx) parser ───────────────────────────────────────────────────────
+
+def _docx_sheet_rows(path: Path) -> list[tuple[str, list[tuple]]]:
+    """Extract tables from a Word document."""
+    from docx import Document
+    doc = Document(str(path))
+    sheets = []
+    for i, table in enumerate(doc.tables):
+        rows = []
+        for row in table.rows:
+            cells = tuple(cell.text.strip() for cell in row.cells)
+            if any(cells):
+                rows.append(cells)
+        if rows:
+            sheets.append((f"Table{i+1}", rows))
+    return sheets
+
+
+def parse_docx(path: Path) -> list[dict]:
+    records = []
+    for sheet_name, rows in _docx_sheet_rows(path):
+        if not rows:
+            continue
+        header_rows = rows[:4]
+        col_map = _detect_suborder_columns(header_rows)
+        if "item" not in col_map and "tag_no" not in col_map:
+            continue
+        item_col   = col_map.get("item", col_map.get("tag_no"))
+        tag_col    = col_map.get("tag_no") if col_map.get("tag_no") != item_col else None
+        data_start = _find_header_end(rows, col_map)
+        current_tag = ""
+        for row in rows[data_start:]:
+            raw_tag = _str(row[tag_col]) if tag_col is not None and len(row) > tag_col else ""
+            if raw_tag:
+                current_tag = " / ".join(raw_tag.splitlines())
+            item_name = _str(row[item_col]) if len(row) > item_col else ""
+            if not item_name:
+                continue
+            if re.search(r"sub.?order.*status|delivery status|total|合計", item_name, re.I):
+                continue
+            def gcol(key, r=row):
+                ci = col_map.get(key)
+                return r[ci] if ci is not None and len(r) > ci else None
+            eta = _to_date(gcol("eta"))
+            ata = _to_date(gcol("ata"))
+            ros = _to_date(gcol("ros"))
+            records.append({
+                "source_file": path.name, "sheet": sheet_name,
+                "mr_no": "", "mr_name": "",
+                "po_no": _str(gcol("po_no")), "tag_no": current_tag,
+                "vendor": "", "delivery_location": "", "ros": ros,
+                "item_name": item_name, "qty": _str(gcol("qty")),
+                "sub_vendor": _str(gcol("sub_vendor")),
+                "eta": eta, "ata": ata,
+                "effective_delivery": ata or eta,
+                "sub_order_received": None, "record_type": "Word",
+            })
+    return records
+
+
 # ── Auto-detect file type and dispatch ───────────────────────────────────────
 
 def _is_esp_file(path: Path) -> bool:
@@ -281,15 +400,28 @@ def _is_esp_file(path: Path) -> bool:
         return False
 
 
+def parse_file(path: Path) -> list[dict]:
+    """Dispatch to the right parser based on file extension."""
+    ext = path.suffix.lower()
+    if ext in (".xlsx", ".xls"):
+        return parse_esp(path) if _is_esp_file(path) else parse_suborder_list(path)
+    if ext == ".pdf":
+        return parse_pdf(path)
+    if ext in (".docx", ".doc"):
+        return parse_docx(path)
+    return []
+
+
 def load_all_files(folder: str | Path) -> pd.DataFrame:
     folder = Path(folder)
     all_records: list[dict] = []
-    for f in sorted(folder.glob("*.xlsx")) + sorted(folder.glob("*.xls")):
+    globs = ["*.xlsx", "*.xls", "*.pdf", "*.docx", "*.doc"]
+    files = []
+    for g in globs:
+        files.extend(sorted(folder.glob(g)))
+    for f in files:
         try:
-            if _is_esp_file(f):
-                all_records.extend(parse_esp(f))
-            else:
-                all_records.extend(parse_suborder_list(f))
+            all_records.extend(parse_file(f))
         except Exception as e:
             print(f"[WARN] Could not parse {f.name}: {e}")
 
